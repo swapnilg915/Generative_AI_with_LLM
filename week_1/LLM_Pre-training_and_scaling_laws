@@ -1,0 +1,57 @@
+1. pre training LLM
+2. computational challenges of training LLM
+3. Efficient multi GPU compute strategies
+4. Scaling laws and compute-optimal models
+
+	scaling choices for pre-training
+		goal: maximize model performance
+		1. scaling choice - dataset size (number of tokens)
+		2. model performance (minimize loss)
+		3. Scaling choice - model size  (noumber of params)
+		4. constraint - compute budget - 
+
+		training models with more params in un-optimal way
+			GPT3, PALM 
+		training models with less params in optimal ways
+			LLama - 65B
+			BloombergGPT (trained in a compute optimal ways following chinchilla laws)- 50B
+			flacon - 7B, 40B
+
+		start to optimize the model design
+
+Pre-training for domain adaptation
+
+	get working prototype much faster
+
+	there are domain specific words in 
+		legal/law
+		medical
+		finance
+		science
+
+	pre-training a mmodel from scrathc would be beneficial in the above domains
+
+	BloombergGPT - domain adaption for finance
+		trained on financial (public + private) 51% + other (public) 49%
+		best in class results in fiancial data + competetive performance on general purpose
+
+	Q. pre-trainng scaling laws
+	1. there is a relationship between model size (no of params) and optimal no of tokens to train the model with
+	2. when measuring compute budget we can use "petaflops per second-day" as a metric
+	3. to scale our model, we need to jointly increase dataset size and model size, or they can become a bottleneck for each other
+
+
+Domain specific training bloomberg:
+	Chinchilla Scaling Laws guide the: 
+		no. of params
+		no. of tokens
+
+	BloombergGPT is very close to scaling laws of chinchila-1,2,3
+
+	2 graphs: 
+		no. of params vs flops
+		no. of tokens vs flops
+
+	large decoder only LM
+	50 billion parameters
+	1.4 trillion tokens, constructed a dataset pf 700 Billion tokens, due to early stopping the models is trained on 569 Billion tokens

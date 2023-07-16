@@ -1,0 +1,62 @@
+Lab 1 - Generative AI Use Case: Summarize Dialogue
+
+open aws sagemaker studio
+copy notebook
+check if the correct env and vm is selected (32gb)
+install 
+	torch
+	torchdata
+	transformers
+	datasets
+
+load data from dialogsum dataset from huggingface
+	contains 10k+ dialogues with corresponding manually labeling summaries and topics
+explore dataset, check 2 dialogues
+load model - model_name='google/flan-t5-base'
+load tokenizer for model
+Tokenization is the process of splitting texts into smaller units that can be processed by the LLM models
+print encoded decoded sentence
+	encoded: just a array of integer values (unique integer assigned to each token in the vocab)
+
+when we pass the  input to the base LLM, without instructing it using prompt engg, it has no clue or idea about what it is supposed to do
+hence most probably it just tries to pedict the next word/sentence
+
+Prompt engineering: is an act of a human changing the prompt (input to the model), to improve the response for a given task
+
+we use prompt: please summarize the following dialogue
+still the models istn giving the good response
+
+zero shot inference with prompt template from FLAN-T5
+
+one shot inference
+few shot
+
+few shot did not provide much improvement over one shot
+
+
+try different dialogues, stay within models 512 context length
+
+5 - Generative Configuration Parameters for Inference
+	lets change the configuration params
+
+
+	1. do _sample = True
+		you activate various decoding strategies which infleunce the next token
+	2. Temperature
+	3. top k
+	4. top p
+
+	already using
+	max_new_tokens=50
+
+
+Play with generationConfig
+
+generation_config = GenerationConfig(max_new_tokens=50)
+# generation_config = GenerationConfig(max_new_tokens=10)
+# generation_config = GenerationConfig(max_new_tokens=50, do_sample=True, temperature=0.1)
+# generation_config = GenerationConfig(max_new_tokens=50, do_sample=True, temperature=0.5)
+# generation_config = GenerationConfig(max_new_tokens=50, do_sample=True, temperature=1.0)
+
+Conclusion
+	prompt engineering can take you to the long way but there are some limitations
