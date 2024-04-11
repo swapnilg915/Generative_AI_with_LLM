@@ -1,0 +1,158 @@
+GenAI project cycle
+model finetuning
+model evaluation
+
+In context learning (ICT)
+	zero shot
+	one shot
+	few shot
+
+limitations of ICT
+	may not work for smaller models (LLMs), even with 5-6 examples
+	examples take up space in the context window (usually 512 tokens)
+
+	solution: 
+		finetuning: further train base model
+
+finetuning is a supervised process: training with labelled examples
+
+Instruction finetuning
+	take pre-trained LLM
+	task specific prompt-completion examples with instructions
+	results in finetuned LLM (improved performance)
+	needs compute budget
+
+	1. prepare training data - find public data, process and convert for a specific training format
+	prompt instruction templates
+	Loss: cross entropy
+
+	fine tuning on a single task
+		e.g. summarization
+		often just 500-1000 exaples are enough
+
+		downside:
+			catastrophic forgetting: model may forget to do other tasks, which it used to do before finetuning
+
+		solution 1: finetuning on multiple tasks at the same time
+			often requires 50k-100k examples across all tasks and compute power
+		solution 2: PEFT
+			set of techniques that preserve the original weights of the base LLM
+			trains only task specific adaptive layers
+			great robustness to catastrophic forgetting
+
+	Multi task instruction finetuning
+
+		training data comprises of inputs and outputs for multiple tasks
+		pre-trained LLM -> multi-task instruction finetuning -> instruct LLM
+
+		drawback: requires lot of data 50k-100k, but it is worth
+
+
+		family:
+			FLAN - fine tuned lang net
+			the metaphorical dessert to the main course of pre training
+			FLAN T5: 473 datasets, 146 tasks
+			samsum (sum ~ summarization) dataset - 16k dialogues sumarized
+			dialogsum: dialog summarization, 13k support chats, not a part of FLAN-T5 training data
+			improving summarization capabilities of the FLAN-T5
+
+			before finetuning FLAN-T5 model for summarization: it gives adequate completion, but does not match human baseline
+			after finetuning FLAN-T5 model for summarization: it gives better summary, more closely matches human baseline
+
+		quiz: purpose of finetuning model with prompt datasets
+			to improve the performace and adaptability of the model by finetuing on a specific task
+
+Reading: Scaling instruct models
+	by finetuning palm 540B model on 1836 tasks while incorporating chain-of-thought reasoning data, FLAN acheives improvements in:
+		generalization
+		human usability 
+		zero shot reasoning 
+
+		over the base model
+
+	dataset: SQAUD
+	tasks: 
+		extractive QA
+		query generation
+
+	some tasks are held out, they are used to evaluate model performance on unseen tasks
+
+LLM evaluation: challenges
+
+	LLM model evaluation metrics
+
+		in traditional ml we measure accuracy, but it becomes very challenging in LLM
+			e.g. mike really loves drinking coffee, mike adores sipping coffee
+			e.g. mike does not drink tea, mike does drink tea (there is only one word difference)
+
+		2 widely used evaluation metrics:
+			ROUGE
+				ROUGE 1: Precision, Recall, F1, even of one word is diff, it calculates the same score
+				ROUGE 2: Precision, Recall, F1 using bigram matches, now scores are different
+				ROUGE L : longest common subsequences (LCS) present in the generated output, P,R,F1
+				ROUGE hacking: bad completion results in a good score
+					it is cold outside
+					cold cold cold cold
+					precision score will be perfect 1
+
+				ROUGE clipping: limit the number of unigram matches to the max count for that unigram within the reference
+				ROUGE score depend on the sentence size and usecase
+
+				Huggingface includes ROUGE score to evaluate your model, use ot before and after finetuning in this week's lab
+
+			BLEU SCORE - compare machine generated translations with human generated ones
+				avg precision over the multiple ngram sizes, 
+				calculated over a range of ngram sizes
+				calculates the quality of translation
+
+				can calculate using HUGGINGFACE lib
+
+			both ROUGE AND BLEU are simple and cost effective metrics
+			we can use them for simple reference
+			but we should not use them to report final evaluation of the LLM
+
+			ROUGE: diagnostic evaluation of a summarization tasks
+			BLEU - translation tasks
+
+			For overall evaluation, check the benchmarks designed in the next video
+
+Benchmarks
+
+	LLM's are complex to evaluate
+	selecting the appropriate evaluation dataset is vital
+
+		GLUE
+			2018
+			general lang understanding evaluation
+			sentiment analysis
+			QA
+		SuperGLUE
+			2019
+			multi sentence reasoning
+			reading comprehension
+
+			matches human ability on a specific tasks
+
+		these are used on LLM leaderboard
+
+		benchmarks on massive LLM
+			MMLU - Massive Multi-task Lang Understanding tasks extended way beyond lang understnading, elementary maths, law, computer science etc.
+			BIG-bench - 204 tasks, lingustics, maths, bio, phyiscs, software dev etc. , cost effective
+			HELM (holistic evaluation of LM) - which models perform well on specific tasks
+				metrics:
+					acc
+					calibration
+					robustness
+					fairness
+					bias
+					toxicity
+					efficiency
+
+				addition of new scenarios
+
+				
+
+
+
+
+

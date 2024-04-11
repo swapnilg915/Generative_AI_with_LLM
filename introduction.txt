@@ -1,0 +1,41 @@
+# date: 15th July 2023
+
+you will learn the fundamentals of 
+	1. how Generative AI works and 
+	2. how to deploy it in real world applications
+
+Deep understanding of generative AI
+key steps in typical LLM based generative AI lifecycle
+	data gathering
+	model selection
+	performance evaluation
+	deployment
+
+- Transformer architecture that powers LLM's, 
+- how they are retrained, 
+- how finetuning enables LLM's to be adapted to a wide variety of specific use cases
+
+use EMPIRICAL SCALING LAWS to optimize the model's objective function across 
+	dataset size
+	compute budget
+	inference requirements
+
+apply SOTA 
+	training/tuning/inference tools
+	deployments methods 
+
+	to maximize the performance of models within the specific constraints of your project
+
+Discuss the challenges and opportunities that Generative AI creates for businesses, 
+	after hearing stories from Industry researchers and practioners
+
+
+Syllabus:
+
+	Week 1: Generative AI usecases, project lifecycle, model pre-training
+		17 videos
+	Week 2: Fine-tuning and evaluating LLM's
+		10 videos
+	Week 3: Reinforcement Learning and LLM powered applications
+		21 videos
+

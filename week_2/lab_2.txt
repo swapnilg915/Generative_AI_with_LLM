@@ -1,0 +1,670 @@
+# july 19 2023
+
+Finetune  a generative AI model for dialogue summarization
+
+finetune existing LLM model from huggingface, FLAN-T5
+it provided high quality instruction tuned model for summarization
+to improve the inference we will explore full finetuning approach and evaluate the results with ROUGE
+Then we will perform PEFT, evaluate it and see the benefits of the PEFT
+
+install 
+	torch
+	torchdata
+	transformers
+	datasets
+	evaluate
+	rouge_score
+	loralib
+	peft
+
+import libs
+
+import dataset
+
+	huggingface_dataset_name = "knkarthick/dialogsum"
+
+	dataset = load_dataset(huggingface_dataset_name)
+
+	dataset
+
+import llm
+
+	model_name='google/flan-t5-base'
+
+	original_model = AutoModelForSeq2SeqLM.from_pretrained(model_name, torch_dtype=torch.bfloat16)
+	tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+pull all model params and check how many of them are trainable
+
+	def print_number_of_trainable_model_parameters(model):
+	    trainable_model_params = 0
+	    all_model_params = 0
+	    for _, param in model.named_parameters():
+	        all_model_params += param.numel()
+	        if param.requires_grad:
+	            trainable_model_params += param.numel()
+	    return f"trainable model parameters: {trainable_model_params}\nall model parameters: {all_model_params}\npercentage of trainable model parameters: {100 * trainable_model_params / all_model_params:.2f}%"
+
+	print(print_number_of_trainable_model_parameters(original_model))	
+
+	result
+		trainable model parameters: 247577856
+		all model parameters: 247577856
+		percentage of trainable model parameters: 100.00%
+
+
+test the model with zero shot inferencing
+
+	index = 200
+
+	dialogue = dataset['test'][index]['dialogue']
+	summary = dataset['test'][index]['summary']
+
+	prompt = f"""
+	Summarize the following conversation.
+
+	{dialogue}
+
+	Summary:
+	"""
+
+	inputs = tokenizer(prompt, return_tensors='pt')
+	output = tokenizer.decode(
+	    original_model.generate(
+	        inputs["input_ids"], 
+	        max_new_tokens=200,
+	    )[0], 
+	    skip_special_tokens=True
+	)
+
+	dash_line = '-'.join('' for x in range(100))
+	print(dash_line)
+	print(f'INPUT PROMPT:\n{prompt}')
+	print(dash_line)
+	print(f'BASELINE HUMAN SUMMARY:\n{summary}\n')
+	print(dash_line)
+	print(f'MODEL GENERATION - ZERO SHOT:\n{output}')
+
+
+perform full finetuning
+
+	process the prompt-response dataset into tokens and pull out their input ids
+
+		def tokenize_function(example):
+		    start_prompt = 'Summarize the following conversation.\n\n'
+		    end_prompt = '\n\nSummary: '
+		    prompt = [start_prompt + dialogue + end_prompt for dialogue in example["dialogue"]]
+		    example['input_ids'] = tokenizer(prompt, padding="max_length", truncation=True, return_tensors="pt").input_ids
+		    example['labels'] = tokenizer(example["summary"], padding="max_length", truncation=True, return_tensors="pt").input_ids
+		    
+		    return example
+
+		# The dataset actually contains 3 diff splits: train, validation, test.
+		# The tokenize_function code is handling all data across all splits in batches.
+		tokenized_datasets = dataset.map(tokenize_function, batched=True)
+		tokenized_datasets = tokenized_datasets.remove_columns(['id', 'topic', 'dialogue', 'summary',])
+
+	to save time, subsample the dataset
+
+		tokenized_datasets = tokenized_datasets.filter(lambda example, index: index % 100 == 0, with_indices=True)
+
+	dataset has 3 parts: train, validation, test
+	check teh shapes of all 3 parts
+
+		print(f"Shapes of the datasets:")
+		print(f"Training: {tokenized_datasets['train'].shape}")
+		print(f"Validation: {tokenized_datasets['validation'].shape}")
+		print(f"Test: {tokenized_datasets['test'].shape}")
+
+		print(tokenized_datasets)
+
+
+	result:
+
+		Shapes of the datasets:
+		Training: (125, 2)
+		Validation: (5, 2)
+		Test: (15, 2)
+		DatasetDict({
+		    train: Dataset({
+		        features: ['input_ids', 'labels'],
+		        num_rows: 125
+		    })
+		    test: Dataset({
+		        features: ['input_ids', 'labels'],
+		        num_rows: 15
+		    })
+		    validation: Dataset({
+		        features: ['input_ids', 'labels'],
+		        num_rows: 5
+		    })
+		})
+
+		The output dataset is ready for fine-tuning.
+
+
+finetune the model with preprocessed dataset
+
+	
+	output_dir = f'./dialogue-summary-training-{str(int(time.time()))}'
+
+	training_args = TrainingArguments(
+	    output_dir=output_dir,
+	    learning_rate=1e-5,
+	    num_train_epochs=1,
+	    weight_decay=0.01,
+	    logging_steps=1,
+	    max_steps=1
+	)
+
+	trainer = Trainer(
+	    model=original_model,
+	    args=training_args,
+	    train_dataset=tokenized_datasets['train'],
+	    eval_dataset=tokenized_datasets['validation']
+	)
+
+	trainer.train()
+
+
+Training a fully fine-tuned version of the model would take a few hours on a GPU. To save time, download a checkpoint of the fully fine-tuned model to use in the rest of this notebook. This fully fine-tuned model will also be referred to as the instruct model in this lab.
+
+	!aws s3 cp --recursive s3://dlai-generative-ai/models/flan-dialogue-summary-checkpoint/ ./flan-dialogue-summary-checkpoint/
+
+	The size of the downloaded instruct model is approximately 1GB.
+
+		!ls -alh ./flan-dialogue-summary-checkpoint/pytorch_model.bin
+
+	Create an instance of the AutoModelForSeq2SeqLM class for the instruct model:
+
+		instruct_model = AutoModelForSeq2SeqLM.from_pretrained("./flan-dialogue-summary-checkpoint", torch_dtype=torch.bfloat16)
+
+ Evaluate the Model Qualitatively (Human Evaluation)
+
+
+ 	index = 200
+	dialogue = dataset['test'][index]['dialogue']
+	human_baseline_summary = dataset['test'][index]['summary']
+
+	prompt = f"""
+	Summarize the following conversation.
+
+	{dialogue}
+
+	Summary:
+	"""
+
+	input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+
+	original_model_outputs = original_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
+	original_model_text_output = tokenizer.decode(original_model_outputs[0], skip_special_tokens=True)
+
+	instruct_model_outputs = instruct_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
+	instruct_model_text_output = tokenizer.decode(instruct_model_outputs[0], skip_special_tokens=True)
+
+	print(dash_line)
+	print(f'BASELINE HUMAN SUMMARY:\n{human_baseline_summary}')
+	print(dash_line)
+	print(f'ORIGINAL MODEL:\n{original_model_text_output}')
+	print(dash_line)
+	print(f'INSTRUCT MODEL:\n{instruct_model_text_output}')
+
+
+	result:
+
+		---------------------------------------------------------------------------------------------------
+		BASELINE HUMAN SUMMARY:
+		#Person1# teaches #Person2# how to upgrade software and hardware in #Person2#'s system.
+		---------------------------------------------------------------------------------------------------
+		ORIGINAL MODEL:
+		#Person1#: You'd like to upgrade your computer. #Person2: You'd like to upgrade your computer.
+		---------------------------------------------------------------------------------------------------
+		INSTRUCT MODEL:
+		#Person1# suggests #Person2# upgrading #Person2#'s system, hardware, and CD-ROM drive. #Person2# thinks it's great.
+
+
+Evaluate the Model Quantitatively (with ROUGE Metric)
+
+	The ROUGE metric helps quantify the validity of summarizations produced by models. It compares summarizations to a "baseline" summary which is usually created by a human. While not perfect, it does indicate the overall increase in summarization effectiveness that we have accomplished by fine-tuning.
+
+	rouge = evaluate.load('rouge')
+
+	dialogues = dataset['test'][0:10]['dialogue']
+	human_baseline_summaries = dataset['test'][0:10]['summary']
+
+	original_model_summaries = []
+	instruct_model_summaries = []
+
+	for _, dialogue in enumerate(dialogues):
+	    prompt = f"""
+	Summarize the following conversation.
+
+	{dialogue}
+
+	Summary: """
+	    input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+
+	    original_model_outputs = original_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
+	    original_model_text_output = tokenizer.decode(original_model_outputs[0], skip_special_tokens=True)
+	    original_model_summaries.append(original_model_text_output)
+
+	    instruct_model_outputs = instruct_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
+	    instruct_model_text_output = tokenizer.decode(instruct_model_outputs[0], skip_special_tokens=True)
+	    instruct_model_summaries.append(instruct_model_text_output)
+	    
+	zipped_summaries = list(zip(human_baseline_summaries, original_model_summaries, instruct_model_summaries))
+	 
+	df = pd.DataFrame(zipped_summaries, columns = ['human_baseline_summaries', 'original_model_summaries', 'instruct_model_summaries'])
+	df
+
+
+	result
+
+		 	human_baseline_summaries 	original_model_summaries 	instruct_model_summaries
+		0 	Ms. Dawson helps #Person1# to write a memo to ... 	#Person1#: Thank you for your time. 	#Person1# asks Ms. Dawson to take a dictation ...
+		1 	In order to prevent employees from wasting tim... 	This memo should go out as an intra-office mem... 	#Person1# asks Ms. Dawson to take a dictation ...
+		2 	Ms. Dawson takes a dictation for #Person1# abo... 	Employees who use the Instant Messaging progra... 	#Person1# asks Ms. Dawson to take a dictation ...
+		3 	#Person2# arrives late because of traffic jam.... 	#Person1: I'm sorry you're stuck in traffic. #... 	#Person2# got stuck in traffic again. #Person1...
+		4 	#Person2# decides to follow #Person1#'s sugges... 	#Person1#: I'm finally here. I've got a traffi... 	#Person2# got stuck in traffic again. #Person1...
+		5 	#Person2# complains to #Person1# about the tra... 	The driver of the car is stuck in a traffic jam. 	#Person2# got stuck in traffic again. #Person1...
+		6 	#Person1# tells Kate that Masha and Hero get d... 	Masha and Hero are getting divorced. 	Masha and Hero are getting divorced. Kate can'...
+		7 	#Person1# tells Kate that Masha and Hero are g... 	Masha and Hero are getting married. 	Masha and Hero are getting divorced. Kate can'...
+		8 	#Person1# and Kate talk about the divorce betw... 	Masha and Hero are getting divorced. 	Masha and Hero are getting divorced. Kate can'...
+		9 	#Person1# and Brian are at the birthday party ... 	#Person1#: Happy birthday, Brian. #Person2#: H... 	Brian's birthday is coming. #Person1# invites ...
+
+
+	Evaluate the models computing ROUGE metrics. Notice the improvement in the results!
+
+		original_model_results = rouge.compute(
+		    predictions=original_model_summaries,
+		    references=human_baseline_summaries[0:len(original_model_summaries)],
+		    use_aggregator=True,
+		    use_stemmer=True,
+		)
+
+		instruct_model_results = rouge.compute(
+		    predictions=instruct_model_summaries,
+		    references=human_baseline_summaries[0:len(instruct_model_summaries)],
+		    use_aggregator=True,
+		    use_stemmer=True,
+		)
+
+		print('ORIGINAL MODEL:')
+		print(original_model_results)
+		print('INSTRUCT MODEL:')
+		print(instruct_model_results)
+
+	result:
+		ORIGINAL MODEL:
+		{'rouge1': 0.24223171760013867, 'rouge2': 0.10614243734192583, 'rougeL': 0.21380459196706333, 'rougeLsum': 0.21740921541379205}
+		INSTRUCT MODEL:
+		{'rouge1': 0.41026607717457186, 'rouge2': 0.17840645241958838, 'rougeL': 0.2977022096267017, 'rougeLsum': 0.2987374187518165}
+
+		The file data/dialogue-summary-training-results.csv contains a pre-populated list of all model results which you can use to evaluate on a larger section of data. Let's do that for each of the models:
+
+
+	results = pd.read_csv("data/dialogue-summary-training-results.csv")
+
+	human_baseline_summaries = results['human_baseline_summaries'].values
+	original_model_summaries = results['original_model_summaries'].values
+	instruct_model_summaries = results['instruct_model_summaries'].values
+
+	original_model_results = rouge.compute(
+	    predictions=original_model_summaries,
+	    references=human_baseline_summaries[0:len(original_model_summaries)],
+	    use_aggregator=True,
+	    use_stemmer=True,
+	)
+
+	instruct_model_results = rouge.compute(
+	    predictions=instruct_model_summaries,
+	    references=human_baseline_summaries[0:len(instruct_model_summaries)],
+	    use_aggregator=True,
+	    use_stemmer=True,
+	)
+
+	print('ORIGINAL MODEL:')
+	print(original_model_results)
+	print('INSTRUCT MODEL:')
+	print(instruct_model_results)
+
+
+	ORIGINAL MODEL:
+	{'rouge1': 0.2334158581572823, 'rouge2': 0.07603964187010573, 'rougeL': 0.20145520923859048, 'rougeLsum': 0.20145899339006135}
+	INSTRUCT MODEL:
+	{'rouge1': 0.42161291557556113, 'rouge2': 0.18035380596301792, 'rougeL': 0.3384439349963909, 'rougeLsum': 0.33835653595561666}
+
+	The results show substantial improvement in all ROUGE metrics:
+
+
+	print("Absolute percentage improvement of INSTRUCT MODEL over HUMAN BASELINE")
+
+	improvement = (np.array(list(instruct_model_results.values())) - np.array(list(original_model_results.values())))
+	for key, value in zip(instruct_model_results.keys(), improvement):
+	    print(f'{key}: {value*100:.2f}%')
+
+
+	result:
+		print("Absolute percentage improvement of INSTRUCT MODEL over HUMAN BASELINE")
+
+		improvement = (np.array(list(instruct_model_results.values())) - np.array(list(original_model_results.values())))
+		for key, value in zip(instruct_model_results.keys(), improvement):
+		    print(f'{key}: {value*100:.2f}%')
+
+
+3 - Perform Parameter Efficient Fine-Tuning (PEFT)
+
+
+	Now, let's perform Parameter Efficient Fine-Tuning (PEFT) fine-tuning as opposed to "full fine-tuning" as you did above. PEFT is a form of instruction fine-tuning that is much more efficient than full fine-tuning - with comparable evaluation results as you will see soon.
+
+	PEFT is a generic term that includes Low-Rank Adaptation (LoRA) and prompt tuning (which is NOT THE SAME as prompt engineering!). In most cases, when someone says PEFT, they typically mean LoRA. LoRA, at a very high level, allows the user to fine-tune their model using fewer compute resources (in some cases, a single GPU). After fine-tuning for a specific task, use case, or tenant with LoRA, the result is that the original LLM remains unchanged and a newly-trained “LoRA adapter” emerges. This LoRA adapter is much, much smaller than the original LLM - on the order of a single-digit % of the original LLM size (MBs vs GBs).
+
+	That said, at inference time, the LoRA adapter needs to be reunited and combined with its original LLM to serve the inference request. The benefit, however, is that many LoRA adapters can re-use the original LLM which reduces overall memory requirements when serving multiple tasks and use cases.
+
+
+	Setup the PEFT/LoRA model for Fine-Tuning
+
+		You need to set up the PEFT/LoRA model for fine-tuning with a new layer/parameter adapter. Using PEFT/LoRA, you are freezing the underlying LLM and only training the adapter. Have a look at the LoRA configuration below. Note the rank (r) hyper-parameter, which defines the rank/dimension of the adapter to be trained.
+
+
+		from peft import LoraConfig, get_peft_model, TaskType
+
+		lora_config = LoraConfig(
+		    r=32, # Rank
+		    lora_alpha=32,
+		    target_modules=["q", "v"],
+		    lora_dropout=0.05,
+		    bias="none",
+		    task_type=TaskType.SEQ_2_SEQ_LM # FLAN-T5
+		)
+
+	Add LoRA adapter layers/parameters to the original LLM to be trained.
+
+
+		peft_model = get_peft_model(original_model, 
+                            lora_config)
+		print(print_number_of_trainable_model_parameters(peft_model))
+
+		result:
+
+			trainable model parameters: 3538944
+			all model parameters: 251116800
+			percentage of trainable model parameters: 1.41%
+
+	 Train PEFT Adapter
+
+	 	output_dir = f'./peft-dialogue-summary-training-{str(int(time.time()))}'
+
+		peft_training_args = TrainingArguments(
+		    output_dir=output_dir,
+		    auto_find_batch_size=True,
+		    learning_rate=1e-3, # Higher learning rate than full fine-tuning.
+		    num_train_epochs=1,
+		    logging_steps=1,
+		    max_steps=1    
+		)
+		    
+		peft_trainer = Trainer(
+		    model=peft_model,
+		    args=peft_training_args,
+		    train_dataset=tokenized_datasets["train"],
+		)
+
+		result:
+
+			Now everything is ready to train the PEFT adapter and save the model.
+
+		peft_trainer.train()
+
+		peft_model_path="./peft-dialogue-summary-checkpoint-local"
+
+		peft_trainer.model.save_pretrained(peft_model_path)
+		tokenizer.save_pretrained(peft_model_path)
+
+
+	That training was performed on a subset of data. To load a fully trained PEFT model, read a checkpoint of a PEFT model from S3.
+
+		!aws s3 cp --recursive s3://dlai-generative-ai/models/peft-dialogue-summary-checkpoint/ ./peft-dialogue-summary-checkpoint-from-s3/ 
+
+		Check that the size of this model is much less than the original LLM:
+
+		!ls -al ./peft-dialogue-summary-checkpoint-from-s3/adapter_model.bin
+
+
+		Prepare this model by adding an adapter to the original FLAN-T5 model. You are setting is_trainable=False because the plan is only to perform inference with this PEFT model. If you were preparing the model for further training, you would set is_trainable=True.
+
+
+		from peft import PeftModel, PeftConfig
+
+		peft_model_base = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base", torch_dtype=torch.bfloat16)
+		tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
+
+		peft_model = PeftModel.from_pretrained(peft_model_base, 
+		                                       './peft-dialogue-summary-checkpoint-from-s3/', 
+		                                       torch_dtype=torch.bfloat16,
+		                                       is_trainable=False)
+
+
+		The number of trainable parameters will be 0 due to is_trainable=False setting:
+
+		print(print_number_of_trainable_model_parameters(peft_model))
+
+		result:
+
+			trainable model parameters: 0
+			all model parameters: 251116800
+			percentage of trainable model parameters: 0.00%
+
+
+		 Evaluate the Model Qualitatively (Human Evaluation)
+
+		 	Make inferences for the same example as in sections 1.3 and 2.3, with the original model, fully fine-tuned and PEFT model.
+
+		 	index = 200
+			dialogue = dataset['test'][index]['dialogue']
+			baseline_human_summary = dataset['test'][index]['summary']
+
+			prompt = f"""
+			Summarize the following conversation.
+
+			{dialogue}
+
+			Summary: """
+
+			input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+
+			original_model_outputs = original_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
+			original_model_text_output = tokenizer.decode(original_model_outputs[0], skip_special_tokens=True)
+
+			instruct_model_outputs = instruct_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
+			instruct_model_text_output = tokenizer.decode(instruct_model_outputs[0], skip_special_tokens=True)
+
+			peft_model_outputs = peft_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
+			peft_model_text_output = tokenizer.decode(peft_model_outputs[0], skip_special_tokens=True)
+
+			print(dash_line)
+			print(f'BASELINE HUMAN SUMMARY:\n{human_baseline_summary}')
+			print(dash_line)
+			print(f'ORIGINAL MODEL:\n{original_model_text_output}')
+			print(dash_line)
+			print(f'INSTRUCT MODEL:\n{instruct_model_text_output}')
+			print(dash_line)
+			print(f'PEFT MODEL: {peft_model_text_output}')
+
+
+		result:
+
+			---------------------------------------------------------------------------------------------------
+			BASELINE HUMAN SUMMARY:
+			#Person1# teaches #Person2# how to upgrade software and hardware in #Person2#'s system.
+			---------------------------------------------------------------------------------------------------
+			ORIGINAL MODEL:
+			#Pork1: Have you considered upgrading your system? #Person1: Yes, but I'd like to make some improvements. #Pork1: I'd like to make a painting program. #Person1: I'd like to make a flyer. #Pork2: I'd like to make banners. #Person1: I'd like to make a computer graphics program. #Person2: I'd like to make a computer graphics program. #Person1: I'd like to make a computer graphics program. #Person2: Is there anything else you'd like to do? #Person1: I'd like to make a computer graphics program. #Person2: Is there anything else you need? #Person1: I'd like to make a computer graphics program. #Person2: I'
+			---------------------------------------------------------------------------------------------------
+			INSTRUCT MODEL:
+			#Person1# suggests #Person2# upgrading #Person2#'s system, hardware, and CD-ROM drive. #Person2# thinks it's great.
+			---------------------------------------------------------------------------------------------------
+			PEFT MODEL: #Person1# recommends adding a painting program to #Person2#'s software and upgrading hardware. #Person2# also wants to upgrade the hardware because it's outdated now.
+
+
+		 Evaluate the Model Quantitatively (with ROUGE Metric)
+
+		 	Perform inferences for the sample of the test dataset (only 10 dialogues and summaries to save time). 
+
+		 		dialogues = dataset['test'][0:10]['dialogue']
+				human_baseline_summaries = dataset['test'][0:10]['summary']
+
+				original_model_summaries = []
+				instruct_model_summaries = []
+				peft_model_summaries = []
+
+				for idx, dialogue in enumerate(dialogues):
+				    prompt = f"""
+				Summarize the following conversation.
+
+				{dialogue}
+
+				Summary: """
+				    
+				    input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+
+				    human_baseline_text_output = human_baseline_summaries[idx]
+				    
+				    original_model_outputs = original_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
+				    original_model_text_output = tokenizer.decode(original_model_outputs[0], skip_special_tokens=True)
+
+				    instruct_model_outputs = instruct_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
+				    instruct_model_text_output = tokenizer.decode(instruct_model_outputs[0], skip_special_tokens=True)
+
+				    peft_model_outputs = peft_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
+				    peft_model_text_output = tokenizer.decode(peft_model_outputs[0], skip_special_tokens=True)
+
+				    original_model_summaries.append(original_model_text_output)
+				    instruct_model_summaries.append(instruct_model_text_output)
+				    peft_model_summaries.append(peft_model_text_output)
+
+				zipped_summaries = list(zip(human_baseline_summaries, original_model_summaries, instruct_model_summaries, peft_model_summaries))
+				 
+				df = pd.DataFrame(zipped_summaries, columns = ['human_baseline_summaries', 'original_model_summaries', 'instruct_model_summaries', 'peft_model_summaries'])
+				df
+
+
+				result:
+
+					 	human_baseline_summaries 	original_model_summaries 	instruct_model_summaries 	peft_model_summaries
+					0 	Ms. Dawson helps #Person1# to write a memo to ... 	The new intra-office policy will apply to all ... 	#Person1# asks Ms. Dawson to take a dictation ... 	#Person1# asks Ms. Dawson to take a dictation ...
+					1 	In order to prevent employees from wasting tim... 	Ms. Dawson will send an intra-office memo to a... 	#Person1# asks Ms. Dawson to take a dictation ... 	#Person1# asks Ms. Dawson to take a dictation ...
+					2 	Ms. Dawson takes a dictation for #Person1# abo... 	The memo should go out today. 	#Person1# asks Ms. Dawson to take a dictation ... 	#Person1# asks Ms. Dawson to take a dictation ...
+					3 	#Person2# arrives late because of traffic jam.... 	#Person1#: I'm here. #Person2#: I'm here. #Per... 	#Person2# got stuck in traffic again. #Person1... 	#Person2# got stuck in traffic and #Person1# s...
+					4 	#Person2# decides to follow #Person1#'s sugges... 	The traffic jam is causing a lot of congestion... 	#Person2# got stuck in traffic again. #Person1... 	#Person2# got stuck in traffic and #Person1# s...
+					5 	#Person2# complains to #Person1# about the tra... 	I'm driving home from work. 	#Person2# got stuck in traffic again. #Person1... 	#Person2# got stuck in traffic and #Person1# s...
+					6 	#Person1# tells Kate that Masha and Hero get d... 	Masha and Hero are divorced for 2 months. 	Masha and Hero are getting divorced. Kate can'... 	Kate tells #Person2# Masha and Hero are gettin...
+					7 	#Person1# tells Kate that Masha and Hero are g... 	Masha and Hero are getting divorced. 	Masha and Hero are getting divorced. Kate can'... 	Kate tells #Person2# Masha and Hero are gettin...
+					8 	#Person1# and Kate talk about the divorce betw... 	#Person1#: Masha and Hero are getting divorced... 	Masha and Hero are getting divorced. Kate can'... 	Kate tells #Person2# Masha and Hero are gettin...
+					9 	#Person1# and Brian are at the birthday party ... 	#Person1#: Happy birthday, Brian. #Person2#: T... 	Brian's birthday is coming. #Person1# invites ... 	Brian remembers his birthday and invites #Pers...
+
+
+			Compute ROUGE score for this subset of the data. 
+
+
+				ORIGINAL MODEL:
+				{'rouge1': 0.2127769756385947, 'rouge2': 0.07849999999999999, 'rougeL': 0.1803101433337705, 'rougeLsum': 0.1872151390166362}
+				INSTRUCT MODEL:
+				{'rouge1': 0.41026607717457186, 'rouge2': 0.17840645241958838, 'rougeL': 0.2977022096267017, 'rougeLsum': 0.2987374187518165}
+				PEFT MODEL:
+				{'rouge1': 0.3725351062275605, 'rouge2': 0.12138811933618107, 'rougeL': 0.27620639623170606, 'rougeLsum': 0.2758134870822362}
+
+				Notice, that PEFT model results are not too bad, while the training process was much easier!
+
+
+			You already computed ROUGE score on the full dataset, after loading the results from the data/dialogue-summary-training-results.csv file. Load the values for the PEFT model now and check its performance compared to other models.
+
+
+				human_baseline_summaries = results['human_baseline_summaries'].values
+				original_model_summaries = results['original_model_summaries'].values
+				instruct_model_summaries = results['instruct_model_summaries'].values
+				peft_model_summaries     = results['peft_model_summaries'].values
+
+				original_model_results = rouge.compute(
+				    predictions=original_model_summaries,
+				    references=human_baseline_summaries[0:len(original_model_summaries)],
+				    use_aggregator=True,
+				    use_stemmer=True,
+				)
+
+				instruct_model_results = rouge.compute(
+				    predictions=instruct_model_summaries,
+				    references=human_baseline_summaries[0:len(instruct_model_summaries)],
+				    use_aggregator=True,
+				    use_stemmer=True,
+				)
+
+				peft_model_results = rouge.compute(
+				    predictions=peft_model_summaries,
+				    references=human_baseline_summaries[0:len(peft_model_summaries)],
+				    use_aggregator=True,
+				    use_stemmer=True,
+				)
+
+				print('ORIGINAL MODEL:')
+				print(original_model_results)
+				print('INSTRUCT MODEL:')
+				print(instruct_model_results)
+				print('PEFT MODEL:')
+				print(peft_model_results)
+
+
+			results:
+
+
+				ORIGINAL MODEL:
+				{'rouge1': 0.2334158581572823, 'rouge2': 0.07603964187010573, 'rougeL': 0.20145520923859048, 'rougeLsum': 0.20145899339006135}
+				INSTRUCT MODEL:
+				{'rouge1': 0.42161291557556113, 'rouge2': 0.18035380596301792, 'rougeL': 0.3384439349963909, 'rougeLsum': 0.33835653595561666}
+				PEFT MODEL:
+				{'rouge1': 0.40810631575616746, 'rouge2': 0.1633255794568712, 'rougeL': 0.32507074586565354, 'rougeLsum': 0.3248950182867091}
+
+				The results show less of an improvement over full fine-tuning, but the benefits of PEFT typically outweigh the slightly-lower performance metrics.
+
+
+
+		Calculate the improvement of PEFT over the original model:
+
+
+			print("Absolute percentage improvement of PEFT MODEL over HUMAN BASELINE")
+
+			improvement = (np.array(list(peft_model_results.values())) - np.array(list(original_model_results.values())))
+			for key, value in zip(peft_model_results.keys(), improvement):
+			    print(f'{key}: {value*100:.2f}%')
+
+
+			result:
+
+				Absolute percentage improvement of PEFT MODEL over HUMAN BASELINE
+				rouge1: 17.47%
+				rouge2: 8.73%
+				rougeL: 12.36%
+				rougeLsum: 12.34%
+
+
+		Now calculate the improvement of PEFT over a full fine-tuned model:
+
+
+			print("Absolute percentage improvement of PEFT MODEL over INSTRUCT MODEL")
+
+			improvement = (np.array(list(peft_model_results.values())) - np.array(list(instruct_model_results.values())))
+			for key, value in zip(peft_model_results.keys(), improvement):
+			    print(f'{key}: {value*100:.2f}%')
+
+
+			result:
+
+				Absolute percentage improvement of PEFT MODEL over INSTRUCT MODEL
+				rouge1: -1.35%
+				rouge2: -1.70%
+				rougeL: -1.34%
+				rougeLsum: -1.35%
+
+
+
+		Here you see a small percentage decrease in the ROUGE metrics vs. full fine-tuned. However, the training requires much less computing and memory resources (often just a single GPU).

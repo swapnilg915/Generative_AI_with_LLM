@@ -1,0 +1,28 @@
+#17th july 2023
+
+Sometimes prompting hits the ceiling and then we need fine tuning
+
+instruction tuning - on base models
+	have knowledge about the world
+	but when we ask to do any task, it fails
+	following instructions is different from predicting the next word
+	instruction tuning on broad range of instructions
+	parameter efficient finetuning
+	finetuning for specific task/ specific domain
+fine tuning
+	on a single task
+	multi task
+scaling instruct models
+model evaluation
+benchmarks
+
+parameter efficient finetuning
+	PEFT
+	technique 1: LORA
+	technique 2: soft prompts
+
+Lab 2: fine-tune a generative AI model for dialogue summarization
+Graded assignment 
+Reading: resources
+
+
